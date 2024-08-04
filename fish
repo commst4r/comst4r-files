@@ -1,0 +1,1 @@
+/home/comst4r/.config/fish/
