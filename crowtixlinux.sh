@@ -1,59 +1,104 @@
 #!/bin/bash
 
-# Function to format partitions
-format_partitions() {
-    echo "Formatting partitions..."
-    mkfs.fat -F32 "$EFI_PART"
-    mkfs.btrfs "$MAIN_PART"
-    echo "Partitions formatted."
-}
+# Check if the script is run as root
+if [[ $EUID -ne 0 ]]; then
+  echo "This script must be run as root." 
+  exit 1
+fi
 
-# Function to create Btrfs subvolumes
-create_subvolumes() {
+# List available disks
+lsblk
+
+# Ask the user to select a disk to partition
+read -p "Enter the disk to partition (e.g., /dev/sda): " disk
+
+# Confirm the selected disk
+echo "You have chosen $disk. Make sure this is correct!"
+read -p "Do you want to proceed with partitioning $disk? (yes/no): " confirm
+
+if [[ "$confirm" != "yes" ]]; then
+  echo "Exiting script."
+  exit 1
+fi
+
+# Prompt the user to choose between ext4 and btrfs for the root partition
+read -p "Choose the filesystem for the root partition (ext4/btrfs): " fs_choice
+
+if [[ "$fs_choice" != "ext4" && "$fs_choice" != "btrfs" ]]; then
+  echo "Invalid choice. Please run the script again and choose either ext4 or btrfs."
+  exit 1
+fi
+
+# Start fdisk to create new partitions
+echo "Starting fdisk on $disk..."
+fdisk $disk <<EOF
+g
+n
+1
+
++512M
+t
+1
+n
+2
+
+
+w
+EOF
+
+echo "Partitions created on $disk."
+
+# Inform the user of the changes
+partprobe $disk
+lsblk $disk
+
+echo "Partitioning complete. Available partitions on $disk:"
+lsblk $disk
+
+# Ask user where to mount the partitions
+read -p "Enter the EFI partition (e.g., /dev/sda1): " EFI_PART
+read -p "Enter the main system partition (e.g., /dev/sda2): " MAIN_PART
+
+# Optional swap creation
+read -p "Do you want to create a swap partition? (yes/no): " create_swap
+
+if [[ "$create_swap" == "yes" ]]; then
+  read -p "Enter the swap partition (e.g., /dev/sda3): " SWAP_PARTITION
+
+    # Create swap
+    mkswap $SWAP_PARTITION
+    swapon $SWAP_PARTITION
+    echo "Swap created and activated on $SWAP_PARTITION."
+fi
+
+# Format the EFI partition
+mkfs.fat -F32 $EFI_PART
+
+# Format the root partition based on user choice
+if [[ "$fs_choice" == "ext4" ]]; then
+  mkfs.ext4 $MAIN_PART
+elif [[ "$fs_choice" == "btrfs" ]]; then
+  mkfs.btrfs $MAIN_PART
+
+    # Create Btrfs subvolumes if btrfs is chosen
     echo "Creating Btrfs subvolumes..."
-    mount "$MAIN_PART" /mnt
+    mount $MAIN_PART /mnt
     btrfs subvolume create /mnt/@
     btrfs subvolume create /mnt/@home
     btrfs subvolume create /mnt/@snapshots
     umount /mnt
     echo "Subvolumes created."
-}
-
-# Function to mount partitions
-mount_partitions() {
-    echo "Mounting partitions..."
-    mount -o noatime,compress=zstd,space_cache=v2,subvol=@ "$MAIN_PART" /mnt
-    mkdir -p /mnt/{boot,home,.snapshots}
-    mount -o noatime,compress=zstd,space_cache=v2,subvol=@home "$MAIN_PART" /mnt/home
-    mount -o noatime,compress=zstd,space_cache=v2,subvol=@snapshots "$MAIN_PART" /mnt/.snapshots
-    mount "$EFI_PART" /mnt/boot
-    echo "Partitions mounted."
-}
-
-# Main script execution
-echo "Artix Linux Installation Script"
-
-# Prompt user for partition choices
-read -p "Enter the EFI partition (e.g., /dev/sda1): " EFI_PART
-read -p "Enter the main system partition (e.g., /dev/sda2): " MAIN_PART
-
-# Prompt user for timezone, hostname, root password, and username details
-read -p "Enter your timezone (e.g., Europe/London): " TIMEZONE
-read -p "Enter your hostname (e.g., myhostname): " HOSTNAME
-read -s -p "Enter root password: " ROOT_PASSWORD
-echo ""
-read -p "Enter your username (e.g., user): " USERNAME
-read -s -p "Enter password for $USERNAME: " USER_PASSWORD
-echo ""
-
-# Format partitions
-format_partitions
-
-# Create Btrfs subvolumes
-create_subvolumes
+    fi
 
 # Mount partitions
-mount_partitions
+echo "Mounting partitions..."
+mount -o noatime,compress=zstd,space_cache=v2,subvol=@ $MAIN_PART /mnt
+mkdir -p /mnt/{boot,home,.snapshots}
+mount -o noatime,compress=zstd,space_cache=v2,subvol=@home $MAIN_PART /mnt/home
+mount -o noatime,compress=zstd,space_cache=v2,subvol=@snapshots $MAIN_PART /mnt/.snapshots
+mount $EFI_PART /mnt/boot
+
+echo "Partitions mounted and ready "
 
 # Install base system and essential packages
 echo "Installing base system and essential packages..."
